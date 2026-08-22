@@ -523,7 +523,10 @@ jobs:
               -o "${TEMP_INSTALLER}" \
               "https://github.com/kinguser981/recovery-installer/releases/download/zip/recovery-installer.zip"
 
-            zip -q -ur "${TEMP_INSTALLER}" "${IMAGE_NAME}"
+            (
+              cd "${PRODUCT_DIR}"
+              zip -q -ur "${GITHUB_WORKSPACE}/${TEMP_INSTALLER}" "${IMAGE_NAME}"
+            )
 
             echo "Recovery installer created."
 
