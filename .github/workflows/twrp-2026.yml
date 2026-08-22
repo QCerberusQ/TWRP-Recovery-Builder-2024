@@ -1,0 +1,624 @@
+name: TWRP Recovery Builder
+
+on:
+  workflow_dispatch:
+    inputs:
+      MANIFEST_BRANCH:
+        description: 'TWRP Minimal-Manifest Branch'
+        required: true
+        default: 'twrp-12.1'
+        type: choice
+        options:
+          - twrp-14.1
+          - twrp-12.1
+          - twrp-11
+          - twrp-9.0
+
+      DEVICE_TREE:
+        description: 'Custom Recovery Tree'
+        required: true
+        default: 'https://github.com/QCerberusQ/ofox_device_xiaomi_raphael'
+
+      DEVICE_TREE_BRANCH:
+        description: 'Custom Recovery Tree Branch'
+        required: true
+        default: 'android-12.1-unified'
+
+      DEVICE_PATH:
+        description: 'Specify your Device Path'
+        required: true
+        default: 'device/xiaomi/raphael'
+
+      DEVICE_NAME:
+        description: 'Specify your Device Codename'
+        required: true
+        default: 'raphael'
+
+      BUILD_TARGET:
+        description: 'Specify your Build Target'
+        required: true
+        default: 'recovery'
+        type: choice
+        options:
+          - boot
+          - recovery
+          - vendorboot
+
+      LDCHECK:
+        description: 'Path of blob to check'
+        required: true
+        default: 'system/bin/qseecomd'
+
+      RECOVERY_TAR:
+        description: 'Create Recovery.tar for Samsung devices'
+        required: false
+        default: false
+        type: boolean
+
+      RECOVERY_INSTALLER:
+        description: 'Include recovery-installer.zip'
+        required: true
+        default: true
+        type: boolean
+
+
+jobs:
+  build:
+    name: Build TWRP by ${{ github.actor }}
+    runs-on: ubuntu-22.04
+
+    if: github.event.repository.owner.id == github.event.sender.id
+
+    permissions:
+      contents: write
+
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+
+    steps:
+
+      # ------------------------------------------------------------
+      # Checkout
+      # ------------------------------------------------------------
+
+      - name: Check Out
+        uses: actions/checkout@v4
+
+
+      # ------------------------------------------------------------
+      # Display Inputs
+      # ------------------------------------------------------------
+
+      - name: Display Inputs
+        shell: bash
+        run: |
+          echo "::group::Build Configuration"
+
+          echo "Manifest Branch : ${{ inputs.MANIFEST_BRANCH }}"
+          echo "Device Tree     : ${{ inputs.DEVICE_TREE }}"
+          echo "Device Branch   : ${{ inputs.DEVICE_TREE_BRANCH }}"
+          echo "Device Path     : ${{ inputs.DEVICE_PATH }}"
+          echo "Device Name     : ${{ inputs.DEVICE_NAME }}"
+          echo "Build Target    : ${{ inputs.BUILD_TARGET }}image"
+          echo "LDCheck Blob    : ${{ inputs.LDCHECK }}"
+          echo "Recovery TAR    : ${{ inputs.RECOVERY_TAR }}"
+          echo "Installer ZIP   : ${{ inputs.RECOVERY_INSTALLER }}"
+
+          echo "::endgroup::"
+
+
+      # ------------------------------------------------------------
+      # Cleanup Runner
+      # ------------------------------------------------------------
+
+      - name: Cleanup
+        uses: rokibhasansagar/slimhub_actions@main
+
+
+      # ------------------------------------------------------------
+      # Swap
+      # ------------------------------------------------------------
+
+      - name: Set Swap Space
+        uses: pierotofy/set-swap-space@master
+        with:
+          swap-size-gb: 24
+
+
+      # ------------------------------------------------------------
+      # Build Dependencies
+      # ------------------------------------------------------------
+
+      - name: Prepare Build Environment
+        shell: bash
+        run: |
+          sudo add-apt-repository -y universe
+          sudo apt update
+
+          sudo apt install -y \
+            build-essential \
+            gperf \
+            gcc-multilib \
+            g++-multilib \
+            libc6-dev-i386 \
+            lib32ncurses5-dev \
+            x11proto-core-dev \
+            lib32z1-dev \
+            libgl1-mesa-dev \
+            libxml2-utils \
+            xsltproc \
+            bc \
+            ccache \
+            lib32readline-dev \
+            liblz4-tool \
+            libncurses5-dev \
+            libsdl1.2-dev \
+            libwxgtk3.0-gtk3-dev \
+            lzop \
+            pngcrush \
+            schedtool \
+            squashfs-tools \
+            imagemagick \
+            libbz2-dev \
+            lzma \
+            ncftp \
+            qemu-user-static \
+            libtinfo5 \
+            libgflags-dev \
+            python-is-python3 \
+            libncurses5
+
+
+      # ------------------------------------------------------------
+      # Java
+      # ------------------------------------------------------------
+
+      - name: Install OpenJDK 11
+        uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: '11'
+
+
+      # ------------------------------------------------------------
+      # Git Repo
+      # ------------------------------------------------------------
+
+      - name: Install Git-Repo
+        shell: bash
+        run: |
+          mkdir -p "${HOME}/bin"
+
+          curl -L --fail \
+            https://storage.googleapis.com/git-repo-downloads/repo \
+            -o "${HOME}/bin/repo"
+
+          chmod a+x "${HOME}/bin/repo"
+
+          sudo ln -sf "${HOME}/bin/repo" /usr/bin/repo
+
+          repo --version
+
+
+      # ------------------------------------------------------------
+      # Select Manifest
+      # ------------------------------------------------------------
+
+      - name: Select Manifest
+        shell: bash
+        run: |
+          case "${{ inputs.MANIFEST_BRANCH }}" in
+            twrp-11|twrp-12.1|twrp-14.1)
+              MANIFEST_URL="https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git"
+              ;;
+
+            twrp-9.0)
+              MANIFEST_URL="https://github.com/minimal-manifest-twrp/platform_manifest_twrp_omni.git"
+              ;;
+
+            *)
+              echo "ERROR: Unsupported manifest branch:"
+              echo "${{ inputs.MANIFEST_BRANCH }}"
+              exit 1
+              ;;
+          esac
+
+          echo "MANIFEST_URL=${MANIFEST_URL}" >> "${GITHUB_ENV}"
+
+          echo "Selected manifest:"
+          echo "${MANIFEST_URL}"
+
+
+      # ------------------------------------------------------------
+      # Repo Init
+      # ------------------------------------------------------------
+
+      - name: Initialize Repo
+        shell: bash
+        run: |
+          mkdir -p workspace
+
+          cd workspace
+
+          repo init \
+            --depth=1 \
+            -u "${MANIFEST_URL}" \
+            -b "${{ inputs.MANIFEST_BRANCH }}"
+
+
+      # ------------------------------------------------------------
+      # Repo Sync
+      # ------------------------------------------------------------
+
+      - name: Repo Sync
+        shell: bash
+        run: |
+          cd workspace
+
+          repo sync \
+            -j"$(nproc --all)" \
+            --force-sync \
+            --no-clone-bundle
+
+
+      # ------------------------------------------------------------
+      # Clone Device Tree
+      # ------------------------------------------------------------
+
+      - name: Clone Device Tree
+        shell: bash
+        run: |
+          cd workspace
+
+          mkdir -p "${{ inputs.DEVICE_PATH }}"
+
+          git clone \
+            --depth=1 \
+            -b "${{ inputs.DEVICE_TREE_BRANCH }}" \
+            "${{ inputs.DEVICE_TREE }}" \
+            "${{ inputs.DEVICE_PATH }}"
+
+          cd "${{ inputs.DEVICE_PATH }}"
+
+          COMMIT_ID="$(git rev-parse HEAD)"
+
+          echo "COMMIT_ID=${COMMIT_ID}" >> "${GITHUB_ENV}"
+
+          echo "Device tree commit:"
+          echo "${COMMIT_ID}"
+
+
+      # ------------------------------------------------------------
+      # Detect Device Makefile
+      # ------------------------------------------------------------
+
+      - name: Check Build Makefile
+        shell: bash
+        run: |
+          cd workspace
+
+          if [ -f "${{ inputs.DEVICE_PATH }}/twrp_${{ inputs.DEVICE_NAME }}.mk" ]; then
+
+            DEVICE_MAKEFILE="twrp_${{ inputs.DEVICE_NAME }}"
+
+          elif [ -f "${{ inputs.DEVICE_PATH }}/omni_${{ inputs.DEVICE_NAME }}.mk" ]; then
+
+            DEVICE_MAKEFILE="omni_${{ inputs.DEVICE_NAME }}"
+
+          else
+
+            echo "ERROR: No TWRP/Omni recovery makefile found."
+
+            echo
+            echo "Expected one of:"
+            echo "  ${{ inputs.DEVICE_PATH }}/twrp_${{ inputs.DEVICE_NAME }}.mk"
+            echo "  ${{ inputs.DEVICE_PATH }}/omni_${{ inputs.DEVICE_NAME }}.mk"
+
+            exit 1
+          fi
+
+          echo "DEVICE_MAKEFILE=${DEVICE_MAKEFILE}" >> "${GITHUB_ENV}"
+
+          echo "Using makefile:"
+          echo "${DEVICE_MAKEFILE}"
+
+
+      # ------------------------------------------------------------
+      # Resolve Build Target
+      # ------------------------------------------------------------
+
+      - name: Resolve Build Target
+        shell: bash
+        run: |
+          case "${{ inputs.BUILD_TARGET }}" in
+
+            recovery)
+              BUILD_COMMAND="recoveryimage"
+              IMAGE_NAME="recovery.img"
+              ;;
+
+            boot)
+              BUILD_COMMAND="bootimage"
+              IMAGE_NAME="boot.img"
+              ;;
+
+            vendorboot)
+              BUILD_COMMAND="vendorbootimage"
+              IMAGE_NAME="vendor_boot.img"
+              ;;
+
+            *)
+              echo "ERROR: Unsupported build target."
+              exit 1
+              ;;
+          esac
+
+          echo "BUILD_COMMAND=${BUILD_COMMAND}" >> "${GITHUB_ENV}"
+          echo "IMAGE_NAME=${IMAGE_NAME}" >> "${GITHUB_ENV}"
+
+          echo "Build command : ${BUILD_COMMAND}"
+          echo "Expected image: ${IMAGE_NAME}"
+
+
+      # ------------------------------------------------------------
+      # Build
+      # ------------------------------------------------------------
+
+      - name: Building Image
+        shell: bash
+        run: |
+          cd workspace
+
+          source build/envsetup.sh
+
+          export ALLOW_MISSING_DEPENDENCIES=true
+
+          lunch "${DEVICE_MAKEFILE}-eng"
+
+          echo
+          echo "Starting clean build..."
+          echo
+
+          make clean
+
+          echo
+          echo "Building ${BUILD_COMMAND}..."
+          echo
+
+          make "${BUILD_COMMAND}" -j"$(nproc --all)"
+
+          echo
+          echo "Build completed."
+          echo
+
+
+      # ------------------------------------------------------------
+      # Verify Correct Image
+      # ------------------------------------------------------------
+
+      - name: Verify Build Output
+        shell: bash
+        run: |
+          IMAGE_PATH="workspace/out/target/product/${{ inputs.DEVICE_NAME }}/${IMAGE_NAME}"
+
+          echo "Checking:"
+          echo "${IMAGE_PATH}"
+
+          if [ ! -f "${IMAGE_PATH}" ]; then
+            echo
+            echo "ERROR: Expected build output was not found."
+            echo
+            echo "Requested target : ${{ inputs.BUILD_TARGET }}"
+            echo "Expected image   : ${IMAGE_NAME}"
+            echo
+
+            ls -lah "workspace/out/target/product/${{ inputs.DEVICE_NAME }}/" || true
+
+            exit 1
+          fi
+
+          IMAGE_SIZE="$(stat -c%s "${IMAGE_PATH}")"
+          MD5_IMG="$(md5sum "${IMAGE_PATH}" | awk '{print $1}')"
+          SHA256_IMG="$(sha256sum "${IMAGE_PATH}" | awk '{print $1}')"
+
+          echo "IMAGE_PATH=${IMAGE_PATH}" >> "${GITHUB_ENV}"
+          echo "IMAGE_SIZE=${IMAGE_SIZE}" >> "${GITHUB_ENV}"
+          echo "MD5_IMG=${MD5_IMG}" >> "${GITHUB_ENV}"
+          echo "SHA256_IMG=${SHA256_IMG}" >> "${GITHUB_ENV}"
+
+          echo
+          echo "Image successfully found."
+          echo "Size   : ${IMAGE_SIZE} bytes"
+          echo "MD5    : ${MD5_IMG}"
+          echo "SHA256 : ${SHA256_IMG}"
+
+
+      # ------------------------------------------------------------
+      # Set Build Metadata
+      # ------------------------------------------------------------
+
+      - name: Set Build Metadata
+        shell: bash
+        run: |
+          echo "BUILD_DATE=$(date +%Y%m%d)" >> "${GITHUB_ENV}"
+
+          DEVICE_TREE_URL="${{ inputs.DEVICE_TREE }}"
+
+          if [[ "${DEVICE_TREE_URL}" == *.git ]]; then
+            DEVICE_TREE_URL="${DEVICE_TREE_URL%.git}"
+          fi
+
+          echo "DEVICE_TREE_URL=${DEVICE_TREE_URL}" >> "${GITHUB_ENV}"
+
+
+      # ------------------------------------------------------------
+      # Missing Dependency Check
+      # ------------------------------------------------------------
+
+      - name: Checking For Missing Dependencies
+        shell: bash
+        run: |
+          RECOVERY_ROOT="workspace/out/target/product/${{ inputs.DEVICE_NAME }}/recovery/root"
+
+          if [ ! -d "${RECOVERY_ROOT}" ]; then
+            echo "WARNING: Recovery root directory does not exist."
+            echo "Skipping ldcheck."
+
+            exit 0
+          fi
+
+          if [ ! -f "tools/ldcheck" ]; then
+            echo "ERROR: tools/ldcheck was not found."
+            exit 1
+          fi
+
+          if [ ! -f "tools/libneeds" ]; then
+            echo "ERROR: tools/libneeds was not found."
+            exit 1
+          fi
+
+          cp -f tools/libneeds "${RECOVERY_ROOT}/libneeds"
+          cp -f tools/ldcheck "${RECOVERY_ROOT}/ldcheck"
+
+          cd "${RECOVERY_ROOT}"
+
+          echo
+          echo "Running ldcheck against:"
+          echo "${{ inputs.LDCHECK }}"
+          echo
+
+          python3 ldcheck \
+            -p "system/lib64:vendor/lib64:system/lib:vendor/lib" \
+            -d "${{ inputs.LDCHECK }}"
+
+          echo
+          echo "ldcheck completed successfully."
+
+
+      # ------------------------------------------------------------
+      # Prepare Artifacts
+      # ------------------------------------------------------------
+
+      - name: Prepare Release Artifacts
+        shell: bash
+        run: |
+          PRODUCT_DIR="workspace/out/target/product/${{ inputs.DEVICE_NAME }}"
+          ARTIFACT_DIR="${PRODUCT_DIR}/release-artifacts"
+
+          rm -rf "${ARTIFACT_DIR}"
+          mkdir -p "${ARTIFACT_DIR}"
+
+          # Main image
+          cp "${IMAGE_PATH}" "${ARTIFACT_DIR}/${IMAGE_NAME}"
+
+          # Optional recovery installer
+          if [ "${{ inputs.RECOVERY_INSTALLER }}" = "true" ]; then
+
+            echo "Creating recovery installer..."
+
+            TEMP_INSTALLER="${ARTIFACT_DIR}/recovery-installer.zip"
+
+            curl -L --fail \
+              -o "${TEMP_INSTALLER}" \
+              "https://github.com/kinguser981/recovery-installer/releases/download/zip/recovery-installer.zip"
+
+            zip -q -ur "${TEMP_INSTALLER}" "${IMAGE_NAME}"
+
+            echo "Recovery installer created."
+
+          fi
+
+          # Optional Samsung TAR
+          if [ "${{ inputs.RECOVERY_TAR }}" = "true" ]; then
+
+            echo "Creating Samsung TAR..."
+
+            tar -cvf \
+              "${ARTIFACT_DIR}/${IMAGE_NAME%.*}.tar" \
+              -C "${PRODUCT_DIR}" \
+              "${IMAGE_NAME}"
+
+            echo "Samsung TAR created."
+
+          fi
+
+          # Recovery ramdisk / vendor ramdisk artifacts
+          if compgen -G "${PRODUCT_DIR}/obj/PACKAGING/vendor_ramdisk_fragments_intermediates/recovery.*" > /dev/null; then
+            cp \
+              ${PRODUCT_DIR}/obj/PACKAGING/vendor_ramdisk_fragments_intermediates/recovery.* \
+              "${ARTIFACT_DIR}/"
+          fi
+
+          if compgen -G "${PRODUCT_DIR}/ramdisk-recovery.*" > /dev/null; then
+            cp \
+              ${PRODUCT_DIR}/ramdisk-recovery.* \
+              "${ARTIFACT_DIR}/"
+          fi
+
+          echo
+          echo "Release artifacts:"
+          ls -lah "${ARTIFACT_DIR}"
+
+
+      # ------------------------------------------------------------
+      # Upload Release
+      # ------------------------------------------------------------
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            workspace/out/target/product/${{ inputs.DEVICE_NAME }}/release-artifacts/*
+          name: Unofficial TWRP for ${{ inputs.DEVICE_NAME }} // ${{ env.BUILD_DATE }}
+          tag_name: ${{ github.run_id }}
+          body: |
+            ## TWRP Build
+
+            **Device:** `${{ inputs.DEVICE_NAME }}`
+
+            **Manifest:** `${{ inputs.MANIFEST_BRANCH }}`
+
+            **Build Target:** `${{ inputs.BUILD_TARGET }}`
+
+            **Image:** `${{ env.IMAGE_NAME }}`
+
+            **Image Size:** `${{ env.IMAGE_SIZE }} bytes`
+
+            **MD5:**
+            `${{ env.MD5_IMG }}`
+
+            **SHA256:**
+            `${{ env.SHA256_IMG }}`
+
+            **Device Tree:**
+            ${{ env.DEVICE_TREE_URL }}/tree/${{ inputs.DEVICE_TREE_BRANCH }}
+
+            **Device Tree Commit:**
+            ${{ env.DEVICE_TREE_URL }}/commit/${{ env.COMMIT_ID }}
+
+            **GitHub Actions Run:**
+            ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+
+      # ------------------------------------------------------------
+      # Build Summary
+      # ------------------------------------------------------------
+
+      - name: Build Summary
+        shell: bash
+        run: |
+          echo "============================================================"
+          echo "                    BUILD SUCCESSFUL"
+          echo "============================================================"
+          echo
+          echo "Device       : ${{ inputs.DEVICE_NAME }}"
+          echo "Manifest     : ${{ inputs.MANIFEST_BRANCH }}"
+          echo "Target       : ${{ inputs.BUILD_TARGET }}"
+          echo "Image        : ${IMAGE_NAME}"
+          echo "Size         : ${IMAGE_SIZE} bytes"
+          echo "MD5          : ${MD5_IMG}"
+          echo "SHA256       : ${SHA256_IMG}"
+          echo "Tree Commit  : ${COMMIT_ID}"
+          echo
+          echo "============================================================"
