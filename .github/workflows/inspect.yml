@@ -4,39 +4,51 @@ on:
   workflow_dispatch:
     inputs:
       IMAGE_URL:
-        description: 'vendor_boot.img dosyasının direkt indirme linki (Eğer dosyayı GitHub depona "vendor_boot.img" adıyla yüklediysen burayı boş bırakabilirsin)'
-        required: false
-        default: ''
+        description: 'İndirilecek Link (Yandex Disk veya Direkt Link)'
+        required: true
+        default: 'https://disk.yandex.com.tr/d/va9bOSjnnawrkw'
 
 jobs:
   inspect:
     runs-on: ubuntu-latest
     steps:
-      - name: Depoyu Kontrol Et
-        uses: actions/checkout@v4
+      - name: Gerekli Paketleri Kur (jq, wget, unzip)
+        run: sudo apt-get update && sudo apt-get install -y jq wget unzip
 
-      - name: vendor_boot.img Dosyasını Hazırla
+      - name: İmajı İndir (Yandex API Destekli)
         run: |
-          if [ -n "${{ github.event.inputs.IMAGE_URL }}" ]; then
-            echo "İmaj URL'den indiriliyor..."
-            wget -O vendor_boot.img "${{ github.event.inputs.IMAGE_URL }}"
-          else
-            echo "Depodaki vendor_boot.img aranıyor..."
-            if [ ! -f vendor_boot.img ]; then
-              echo "HATA: vendor_boot.img bulunamadı! Lütfen ya depoya yükle ya da bir URL gir."
+          URL="${{ github.event.inputs.IMAGE_URL }}"
+          echo "İndirilecek URL: $URL"
+          
+          if [[ "$URL" == *"yandex"* ]]; then
+            echo "Yandex Disk linki algılandı. API üzerinden direkt link çözümleniyor..."
+            # Yandex API ile genel linkten direkt indirme linkini al
+            DIRECT_URL=$(curl -s "https://cloud-api.yandex.net/v1/disk/public/resources/download?public_key=$URL" | jq -r .href)
+            
+            if [ "$DIRECT_URL" == "null" ] || [ -z "$DIRECT_URL" ]; then
+              echo "HATA: Yandex API direkt linki veremedi. Link bozuk veya kota aşılmış olabilir."
               exit 1
             fi
+            
+            echo "Direkt link bulundu! İndiriliyor..."
+            wget -qO vendor_boot.img "$DIRECT_URL"
+          else
+            echo "Standart direkt URL algılandı, indiriliyor..."
+            wget -qO vendor_boot.img "$URL"
           fi
+          
+          echo "İndirme tamamlandı! Dosya boyutu:"
+          ls -lh vendor_boot.img
 
       - name: Magiskboot'u İndir ve Kur (Linux x86_64)
         run: |
           echo "Resmi Magisk indiriliyor..."
           wget -qO magisk.apk https://github.com/topjohnwu/Magisk/releases/download/v27.0/Magisk-v27.0.apk
-          echo "Magisk içinden bilgisayar uyumlu (x86_64) magiskboot çıkarılıyor..."
+          echo "Magisk içinden PC uyumlu (x86_64) magiskboot çıkarılıyor..."
           unzip -q magisk.apk lib/x86_64/libmagiskboot.so
           mv lib/x86_64/libmagiskboot.so magiskboot
           chmod +x magiskboot
-          echo "Magiskboot hazır!"
+          echo "Magiskboot kullanıma hazır!"
 
       - name: İmajı Parçala ve Analiz Et
         run: |
