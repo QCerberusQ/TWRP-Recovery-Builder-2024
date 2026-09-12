@@ -154,9 +154,15 @@ jobs:
           cd workspace
           source build/envsetup.sh
           export ALLOW_MISSING_DEPENDENCIES=true
-          lunch ${{ env.DEVICE_MAKEFILE }}-eng
-          make clean
-          make ${{ github.event.inputs.BUILD_TARGET }}image -j$(nproc --all)
+          if [[ "${{ github.event.inputs.MANIFEST_BRANCH }}" == "twrp-14.1" ]]; then
+            lunch ${{ env.DEVICE_MAKEFILE }}-ap2a-eng
+            make clean
+            mka adbd ${{ github.event.inputs.BUILD_TARGET }}image -j$(nproc --all)
+          else
+            lunch ${{ env.DEVICE_MAKEFILE }}-eng
+            make clean
+            make ${{ github.event.inputs.BUILD_TARGET }}image -j$(nproc --all)
+          fi
           echo "Done building your ${{ github.event.inputs.BUILD_TARGET }}.img"
           
       - name: Set Build Date
