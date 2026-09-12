@@ -1,0 +1,51 @@
+name: Inspect vendor_boot with Magiskboot
+
+on:
+  workflow_dispatch:
+    inputs:
+      IMAGE_URL:
+        description: 'vendor_boot.img dosyasının direkt indirme linki (Eğer dosyayı GitHub depona "vendor_boot.img" adıyla yüklediysen burayı boş bırakabilirsin)'
+        required: false
+        default: ''
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Depoyu Kontrol Et
+        uses: actions/checkout@v4
+
+      - name: vendor_boot.img Dosyasını Hazırla
+        run: |
+          if [ -n "${{ github.event.inputs.IMAGE_URL }}" ]; then
+            echo "İmaj URL'den indiriliyor..."
+            wget -O vendor_boot.img "${{ github.event.inputs.IMAGE_URL }}"
+          else
+            echo "Depodaki vendor_boot.img aranıyor..."
+            if [ ! -f vendor_boot.img ]; then
+              echo "HATA: vendor_boot.img bulunamadı! Lütfen ya depoya yükle ya da bir URL gir."
+              exit 1
+            fi
+          fi
+
+      - name: Magiskboot'u İndir ve Kur (Linux x86_64)
+        run: |
+          echo "Resmi Magisk indiriliyor..."
+          wget -qO magisk.apk https://github.com/topjohnwu/Magisk/releases/download/v27.0/Magisk-v27.0.apk
+          echo "Magisk içinden bilgisayar uyumlu (x86_64) magiskboot çıkarılıyor..."
+          unzip -q magisk.apk lib/x86_64/libmagiskboot.so
+          mv lib/x86_64/libmagiskboot.so magiskboot
+          chmod +x magiskboot
+          echo "Magiskboot hazır!"
+
+      - name: İmajı Parçala ve Analiz Et
+        run: |
+          echo "=========================================================="
+          echo "============= MAGISKBOOT UNPACK SONUÇLARI ================"
+          echo "=========================================================="
+          
+          ./magiskboot unpack vendor_boot.img
+          
+          echo "=========================================================="
+          echo "Çıkarılan dosyalar:"
+          ls -la
